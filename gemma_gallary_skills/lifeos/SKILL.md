@@ -1,7 +1,9 @@
 ---
 name: lifeos
 description: Access Sumit's personal LifeOS vault. Use this for anything about his life, work, projects, finance, travel, decisions, or daily notes. Covers capturing thoughts, searching notes, logging decisions, meeting notes, and loading current context.
-require-secret: true
+metadata:
+  require-secret: true
+  require-secret-description: paste the full MCP base URL https://webseite.com/mcp/yourname/yourtoken
 ---
 
 # LifeOS Vault
