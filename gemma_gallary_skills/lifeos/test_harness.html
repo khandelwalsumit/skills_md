@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>LifeOS Skill Tester</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: monospace; padding: 24px; max-width: 900px; margin: 0 auto; background: #0f0f0f; color: #e0e0e0; }
+    h2 { color: #a78bfa; margin-bottom: 4px; }
+    p.hint { color: #666; font-size: 12px; margin: 0 0 16px; }
+    label { display: block; font-size: 12px; color: #888; margin: 12px 0 4px; }
+    input, textarea {
+      width: 100%; padding: 10px; background: #1a1a1a; border: 1px solid #333;
+      color: #e0e0e0; border-radius: 6px; font-family: monospace; font-size: 13px;
+    }
+    input:focus, textarea:focus { outline: none; border-color: #a78bfa; }
+    textarea { height: 130px; resize: vertical; }
+    .btn-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+    button {
+      padding: 8px 14px; border: none; border-radius: 6px; cursor: pointer;
+      font-family: monospace; font-size: 12px; background: #2a2a2a; color: #ccc;
+      transition: background 0.15s;
+    }
+    button:hover { background: #3a3a3a; }
+    button.primary { background: #7c3aed; color: #fff; font-size: 13px; padding: 10px 20px; }
+    button.primary:hover { background: #6d28d9; }
+    button.primary:disabled { background: #444; color: #777; cursor: not-allowed; }
+    h3 { color: #888; font-size: 12px; text-transform: uppercase; letter-spacing: 1px; margin: 20px 0 6px; }
+    pre {
+      background: #1a1a1a; border: 1px solid #2a2a2a; padding: 14px;
+      border-radius: 6px; white-space: pre-wrap; word-break: break-all;
+      font-size: 12px; line-height: 1.6; min-height: 60px; color: #86efac;
+    }
+    pre.error { color: #f87171; }
+    pre.loading { color: #666; }
+    .status { font-size: 11px; color: #666; margin-top: 6px; }
+  </style>
+</head>
+<body>
+
+<h2>LifeOS Skill — Tester</h2>
+<p class="hint">Simulates exactly how GEMMA calls your skill. Open DevTools (F12) → Network to inspect MCP calls.</p>
+
+<label>MCP URL (secret)</label>
+<input id="secret" type="text" placeholder="https://mcp.aimagen.in/mcp/sumit/yourtoken" />
+
+<label>Tool call JSON</label>
+<textarea id="payload">{"tool": "get_brief", "args": {}}</textarea>
+
+<div class="btn-row">
+  <button class="primary" id="runBtn" onclick="run()">▶ Run</button>
+</div>
+
+<div class="btn-row">
+  <!-- Read -->
+  <button onclick="set('list_tools', {})">list_tools</button>
+  <button onclick="set('get_brief', {})">get_brief</button>
+  <button onclick="set('get_work_snapshot', {})">get_work_snapshot</button>
+  <button onclick="set('get_vault_stats', {})">get_vault_stats</button>
+  <button onclick="set('get_today_note', {})">get_today_note</button>
+  <button onclick="set('get_weekly_note', {week: ''})">get_weekly_note</button>
+  <button onclick="set('get_open_decisions', {})">get_open_decisions</button>
+  <!-- Search -->
+  <button onclick="set('search_vault', {query: 'Bhutan', top_k: 5})">search_vault</button>
+  <button onclick="set('get_context', {topic: 'Parallax'})">get_context</button>
+  <button onclick="set('search_by_tag', {tag: 'decision'})">search_by_tag</button>
+  <button onclick="set('list_files', {folder: ''})">list_files</button>
+  <button onclick="set('list_folders', {})">list_folders</button>
+  <button onclick="set('list_recent_meetings', {n: 5})">list_recent_meetings</button>
+  <!-- Write -->
+  <button onclick="set('add_note', {folder: '00_inbox', title: 'Test note', content: 'Hello from tester', tags: ['test']})">add_note</button>
+  <button onclick="set('append_to_file', {path: '', content: 'test append'})">append_to_file</button>
+</div>
+
+<h3>Result</h3>
+<pre id="output" class="loading">— run a tool above —</pre>
+<div class="status" id="status"></div>
+
+<script>
+  // ── Paste your ai_edge_gallery_get_result function below ──────────────────
+async function ai_edge_gallery_get_result(dataStr, secret) {
+  const MCP_URL = (secret || "").trim();
+
+  if (!MCP_URL.startsWith("http")) {
+    return JSON.stringify({ error: "Invalid MCP URL. Paste the full URL including https://" });
+  }
+
+  async function mcpPost(payload, sessionId) {
+    const headers = {
+      "Content-Type": "application/json",
+      "Accept": "application/json, text/event-stream"
+    };
+    if (sessionId) headers["mcp-session-id"] = sessionId;
+
+    const res = await fetch(MCP_URL, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(payload)
+    });
+
+    const raw = await res.text();
+    let jsonText = raw;
+    if (raw.includes("data:")) {
+      const lines = raw.trim().split("\n");
+      for (let i = lines.length - 1; i >= 0; i--) {
+        const line = lines[i].trim();
+        if (line.startsWith("data:")) {
+          jsonText = line.replace(/^data:\s*/, "");
+          break;
+        }
+      }
+    }
+    return { data: JSON.parse(jsonText), sessionId: res.headers.get("mcp-session-id") };
+  }
+
+  let data;
+  try {
+    data = typeof dataStr === "string" ? JSON.parse(dataStr) : dataStr;
+  } catch (e) {
+    return JSON.stringify({ error: "Bad input JSON: " + dataStr });
+  }
+
+  const { tool, args } = data;
+
+  try {
+    // Initialize — capture session ID from response header
+    const initResp = await mcpPost({
+      jsonrpc: "2.0", id: 1, method: "initialize",
+      params: {
+        protocolVersion: "2024-11-05",
+        capabilities: {},
+        clientInfo: { name: "gemma-gallery", version: "1.0" }
+      }
+    });
+
+    const sessionId = initResp.sessionId;
+
+    // Send initialized notification with session ID
+    mcpPost(
+      { jsonrpc: "2.0", method: "notifications/initialized" },
+      sessionId
+    ).catch(() => {});
+
+    // Call the tool with session ID
+    const isListTools = tool === "list_tools";
+    const resp = await mcpPost({
+      jsonrpc: "2.0", id: 2,
+      method: isListTools ? "tools/list" : "tools/call",
+      params: isListTools ? {} : { name: tool, arguments: args || {} }
+    }, sessionId);
+
+    const result = resp.data;
+
+    if (result.error) {
+      return JSON.stringify({ error: result.error.message || JSON.stringify(result.error) });
+    }
+
+    const toolResult = result.result;
+
+    if (isListTools) {
+      return JSON.stringify({
+        tools: (toolResult.tools || []).map(t => ({ name: t.name, description: t.description }))
+      });
+    }
+
+    if (toolResult.isError) {
+      return JSON.stringify({ error: toolResult.content?.[0]?.text || "Tool error" });
+    }
+
+    const text = (toolResult.content || [])
+      .filter(c => c.type === "text")
+      .map(c => c.text)
+      .join("\n");
+
+    return text || JSON.stringify(toolResult);
+
+  } catch (e) {
+    return JSON.stringify({ error: "Request failed: " + e.message });
+  }
+}
+
+  // ── Harness logic ─────────────────────────────────────────────────────────
+
+  function set(tool, args) {
+    document.getElementById('payload').value = JSON.stringify({ tool, args }, null, 2);
+  }
+
+  async function run() {
+    const secret  = document.getElementById('secret').value.trim();
+    const payload = document.getElementById('payload').value.trim();
+    const out     = document.getElementById('output');
+    const status  = document.getElementById('status');
+    const btn     = document.getElementById('runBtn');
+
+    out.textContent = "Running...";
+    out.className   = "loading";
+    status.textContent = "";
+    btn.disabled    = true;
+
+    const t0 = Date.now();
+
+    try {
+      const result = await ai_edge_gallery_get_result(payload, secret);
+      const elapsed = Date.now() - t0;
+
+      // Pretty-print if JSON, else raw text
+      try {
+        const parsed = JSON.parse(result);
+        if (parsed.error) {
+          out.textContent = JSON.stringify(parsed, null, 2);
+          out.className = "error";
+        } else {
+          out.textContent = JSON.stringify(parsed, null, 2);
+          out.className = "";
+        }
+      } catch {
+        out.textContent = result;
+        out.className = "";
+      }
+
+      status.textContent = `completed in ${elapsed}ms`;
+    } catch (e) {
+      out.textContent = e.message;
+      out.className = "error";
+      status.textContent = `failed after ${Date.now() - t0}ms`;
+    }
+
+    btn.disabled = false;
+  }
+
+  // Allow Ctrl+Enter to run
+  document.addEventListener('keydown', e => {
+    if (e.ctrlKey && e.key === 'Enter') run();
+  });
+</script>
+
+</body>
+</html>
